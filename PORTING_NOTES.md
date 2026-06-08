@@ -1,33 +1,25 @@
 # Porting Notes
 
-## Repo Inspection Summary
+## Intended Production Shape
 
-- Target repo is currently an Astro/TypeScript site with React components.
-- Package manager appears to be npm via `package.json` and `package-lock.json`.
-- No Python package manager file was found (`requirements.txt`, `pyproject.toml`, Poetry, Pipfile, or uv lock).
-- Local `python3 --version` returned Python 3.14.3, but the repo does not declare a Python runtime.
-- No existing Dash, Plotly, pandas, or Dash AG Grid usage was found.
-- Styling conventions use restrained editorial tokens in `src/styles/tokens.css` and `src/styles/base.css`, with warm surfaces, Public Sans UI typography, and thin rule borders.
+Port this prototype into a Dash-adjacent application as a feature module, not as a monolithic `app.py`.
 
-## Recommended Porting Shape
-
-Because the target app is not currently a Dash app, port this as a separate module/folder inside the eventual Dash-adjacent repo rather than into the Astro site directly.
-
-Suggested eventual structure:
+Suggested structure:
 
 ```text
-dash_app/
-  infrastructure_matrix/
-    __init__.py
-    data.py
-    grid_config.py
-    color_modes.py
-    charts.py
-    layout.py
-    callbacks.py
+resilience_matrix/
+  __init__.py
+  data_contract.py
+  data_access.py
+  rbac.py
+  grid_config.py
+  overlays.py
+  charts.py
+  layout.py
+  callbacks.py
 ```
 
-Keep synthetic data in a development-only path and replace it with the real data access layer later.
+Keep `synthetic_data.py` development-only. The production data layer should return the same field contract but enforce row visibility before records are sent to Dash.
 
 ## Dependencies
 
@@ -40,59 +32,102 @@ pandas
 plotly
 ```
 
-Before porting, confirm the target Dash-adjacent repo's pinned versions. Dash AG Grid syntax can vary by major version, so keep `columnDefs`, `dashGridOptions`, and callback property names aligned with the installed version.
+Pin versions in the target repo. This prototype was validated with Dash 4.2.0 and Dash AG Grid 35.2.0 under Python 3.14.3.
 
-## AG Grid Feature Assumptions
+## Row Hierarchy
 
-No AG Grid Enterprise license was found in this repo. The prototype therefore avoids:
+Design target:
 
-- row grouping
-- row aggregation
-- pivoting
-- tree data
+```text
+Enterprise -> MAJCOM -> Installation -> Mission -> Building/Asset
+```
 
-Hierarchy is represented with normal rows:
+The brief requests AG Grid native row grouping with independently collapsible levels. That requires AG Grid Enterprise. This repo does not include a license, so the runnable prototype uses flattened rows with app-managed expansion state.
 
-- `hierarchy_level`
-- `level_rank`
-- identifier columns
-- indented `hierarchy_label`
-- bold parent-row styles
-- app-state buttons that filter visible levels
+Production options:
 
-If the target repo later confirms an Enterprise license, true tree data or row grouping could replace the flattened fallback. The current approach should remain the default until that license is explicit.
+- With AG Grid Enterprise: use native row grouping or tree data, using the existing `path`/`parent_id` fields and server-side rollup rows.
+- Without AG Grid Enterprise: retain the current flattened fallback with explicit expansion state and pinned identity columns.
 
-## Files To Port
-
-- `synthetic_data.py`: Use as a schema/reference only. Replace generated rows with real data.
-- `grid_config.py`: Port most directly. This contains pinned columns, grouped columns, summary/detail `columnGroupShow`, and cell class rules.
-- `color_modes.py`: Port directly unless the product already has a status/color taxonomy.
-- `charts.py`: Port as optional supplemental visuals.
-- `app.py`: Split into layout, callbacks, and styling according to the target Dash app conventions.
+Do not silently enable Enterprise-only features without confirming licensing.
 
 ## Data Contract
 
-The grid expects one record per visible row with these categories of fields:
+Each row should include:
 
-- identifiers: `hierarchy_level`, `enterprise`, `installation`, `mission`, `building`, `hierarchy_label`
-- tags: `source_system`, `gap_category`, `reef_reaf_strategy_tag`, `gaps_tag`
-- likelihoods: `fsrm_likelihood`, `milcon_likelihood`, `external_funding_likelihood`
-- statuses: `planning_maturity`, `redundancy_status`, `partial_fulfillment_status`, `cost_scale`, `evidence_strength`
-- counts and scores: `*_count`, `*_score`, `planning_doc_count`, `rough_order_cost_m`
-- flags: `*_flag`
-- notes: `reason_evidence_note`
+- hierarchy: `row_id`, `parent_id`, `path`, `hierarchy_level`, `level_rank`, `name`, `type`
+- org scope: `enterprise`, `majcom`, `installation`, `mission`, `building_asset`
+- REAF: `reaf_composite`, `reaf_r1_a` ... `reaf_r5_b`
+- gaps: `gap_total`, category gap fields, `unassigned_gap_count`, `has_unassigned_gap_delta`
+- funding: `funding_request_count`, `funding_request_amount_m`
+- condition and availability: `building_condition_score`, `utility_availability_score`
+- initiative progress: `smart_meter_progress`, `microgrid_progress`, `backup_power_progress`
+- eligibility: `fsrm_eligible_count`, `milcon_eligible_count`, `fsrm_eligibility_strength`, `milcon_eligibility_strength`
+- RBAC scope keys: `rbac_enterprise`, `rbac_majcom`, `rbac_installation`, `rbac_mission`, `rbac_asset`
 
-Blank and non-applicable values should be `None`/null, not placeholder text. The grid handles those cells with a subdued blank style.
+Blank/non-applicable values should be null, not placeholder strings. Example: REAF fields are null at Building/Asset level.
 
-## Styling Notes
+## Rollups
 
-The prototype CSS loosely follows the current repo's restrained warm surface, Public Sans UI font, thin borders, and compact controls. When integrating into a Dash app, move these styles to the app's normal stylesheet or theme system.
+Current prototype rollup assumptions:
 
-Avoid making the color modes too saturated across every column. The current rule set emphasizes only the selected metric family and leaves other values readable.
+- score fields roll up by average
+- count fields roll up by sum
+- Mission rows may include `unassigned_gap_count`
+- Mission gap total may therefore exceed the sum of visible child Building/Asset gap counts
+- `has_unassigned_gap_delta` marks that discrepancy and the grid displays a `†` marker
 
-## Known Incompatibilities / Follow-Up
+Production should replace these assumptions with approved business rules per metric.
 
-- The current repo is Astro, not Dash. This prototype should not be mounted directly without a Python web service or separate Dash app.
-- The prototype uses synthetic aggregate parent rows. Real data will need clear aggregation rules for parent levels.
-- Column group open/closed state is local to AG Grid. If the product needs saved user preferences, add persistence later.
-- The hierarchy controls filter by level, they do not perform true expand/collapse per parent. That is intentional to avoid Enterprise features.
+## RBAC
+
+RBAC must be enforced server-side. The prototype's role selector is only a shape demonstration.
+
+Production requirements:
+
+- authenticate the user before building row data
+- map the user to one or more organization scopes
+- filter rows in the data access layer, not in client-only grid state
+- include parent context rows for authorized descendants
+- never send peer organizations outside the user's permission scope to the browser
+
+The current `apply_role_scope()` function is intentionally simple and should be replaced with real authorization logic.
+
+## Color Overlay System
+
+FSRM and MILCON eligibility columns are always colored by their own eligibility strength.
+
+The optional overlay selector applies one of these lenses to other matrix columns:
+
+- no overlay
+- FSRM overlay
+- MILCON overlay
+
+Only one overlay should be active at a time. Keep score-band formatting as the default when no overlay is active.
+
+## Chart Panel
+
+Current prototype chart model:
+
+- scored indicator distribution chart for 0-100 metrics
+- REAF small-multiple mode for R-category sub-scores
+- stacked bar chart for count-based fields
+- X-axis and stack-dimension switchers
+- chart pin/unpin based on selected grid row
+- locked scored-series references while paging through the remaining indicators
+
+Production follow-up:
+
+- wire chart updates to AG Grid native expansion events if Enterprise row grouping is used
+- persist chart pin state if users need saved analysis sessions
+- confirm default stacked bar dimensions with users
+- replace synthetic initiative names with the approved initiative list
+
+## Known Open Items
+
+- exact infrastructure gap taxonomy
+- funding request source systems and ingestion rules
+- complete initiative list
+- final FSRM and MILCON color ramps
+- final visual treatment for unassigned mission-level gaps
+- complete scored indicator inventory beyond REAF, condition, availability, and initiative progress

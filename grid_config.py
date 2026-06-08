@@ -1,106 +1,118 @@
-"""Dash AG Grid column definitions and styling helpers."""
+"""Dash AG Grid column definitions for the resilience matrix prototype."""
 
 from __future__ import annotations
 
-from color_modes import COLOR_MODES
+from synthetic_data import GAP_CATEGORIES, INITIATIVES, REAF_COMPONENTS
 
 
-PINNED_COLUMNS = [
-    {
-        "field": "hierarchy_label",
-        "headerName": "Hierarchy",
-        "pinned": "left",
-        "width": 220,
-        "cellClassRules": {
-            "level-enterprise": "params.data && params.data.hierarchy_level == 'Enterprise'",
-            "level-installation": "params.data && params.data.hierarchy_level == 'Installation'",
-            "level-mission": "params.data && params.data.hierarchy_level == 'Mission'",
-            "level-building": "params.data && params.data.hierarchy_level == 'Building'",
-        },
-        "valueFormatter": {
-            "function": """
-                const level = params.data ? params.data.hierarchy_level : '';
-                const prefix = level === 'Installation' ? '  ' : level === 'Mission' ? '    ' : level === 'Building' ? '      ' : '';
-                return prefix + (params.value || '');
-            """
-        },
-    },
-    {"field": "hierarchy_level", "headerName": "Level", "pinned": "left", "width": 132, "filter": True},
-    {"field": "enterprise", "headerName": "Enterprise", "pinned": "left", "width": 180, "filter": True},
-    {"field": "installation", "headerName": "Installation", "pinned": "left", "width": 160, "filter": True},
-    {"field": "mission", "headerName": "Mission", "pinned": "left", "width": 160, "filter": True},
-    {"field": "building", "headerName": "Building", "pinned": "left", "width": 120, "filter": True},
+SCORE_FIELDS = [
+    "reaf_composite",
+    *REAF_COMPONENTS,
+    "building_condition_score",
+    "utility_availability_score",
+    *INITIATIVES,
 ]
 
 
-def _metric_rules(mode: str):
+def _level_class_rules():
     return {
-        f"mode-{mode}-low": f"params.data && params.data.active_color_mode == '{mode}' && params.value == 'Low'",
-        f"mode-{mode}-medium": f"params.data && params.data.active_color_mode == '{mode}' && params.value == 'Medium'",
-        f"mode-{mode}-high": f"params.data && params.data.active_color_mode == '{mode}' && params.value == 'High'",
-        f"mode-{mode}-very-high": f"params.data && params.data.active_color_mode == '{mode}' && params.value == 'Very high'",
-        "blank-cell": "params.value == null || params.value === ''",
+        "level-enterprise": "params.data && params.data.hierarchy_level == 'Enterprise'",
+        "level-majcom": "params.data && params.data.hierarchy_level == 'MAJCOM'",
+        "level-installation": "params.data && params.data.hierarchy_level == 'Installation'",
+        "level-mission": "params.data && params.data.hierarchy_level == 'Mission'",
+        "level-asset": "params.data && params.data.hierarchy_level == 'Building/Asset'",
     }
 
 
-def _status_rules(mode: str):
-    return {
-        f"mode-{mode}-concept": f"params.data && params.data.active_color_mode == '{mode}' && params.value == 'Concept'",
-        f"mode-{mode}-scoped": f"params.data && params.data.active_color_mode == '{mode}' && params.value == 'Scoped'",
-        f"mode-{mode}-programmed": f"params.data && params.data.active_color_mode == '{mode}' && params.value == 'Programmed'",
-        f"mode-{mode}-validated": f"params.data && params.data.active_color_mode == '{mode}' && params.value == 'Validated'",
-        f"mode-{mode}-single": f"params.data && params.data.active_color_mode == '{mode}' && params.value == 'Single point'",
-        f"mode-{mode}-partial": f"params.data && params.data.active_color_mode == '{mode}' && (params.value == 'Partial' || params.value == 'Substantial')",
-        f"mode-{mode}-redundant": f"params.data && params.data.active_color_mode == '{mode}' && params.value == 'Redundant'",
-        f"mode-{mode}-anecdotal": f"params.data && params.data.active_color_mode == '{mode}' && params.value == 'Anecdotal'",
-        f"mode-{mode}-limited": f"params.data && params.data.active_color_mode == '{mode}' && params.value == 'Limited'",
-        f"mode-{mode}-documented": f"params.data && params.data.active_color_mode == '{mode}' && params.value == 'Documented'",
-        f"mode-{mode}-strong": f"params.data && params.data.active_color_mode == '{mode}' && params.value == 'Strong'",
+def _overlay_rules(always: str | None = None, include_score_default: bool = False):
+    prefix = always or "params.data && params.data.active_overlay"
+    rules = {
         "blank-cell": "params.value == null || params.value === ''",
     }
+    if always == "fsrm":
+        rules.update(
+            {
+                "fsrm-weak": "params.data && Number(params.data.fsrm_eligibility_strength) < 40",
+                "fsrm-mid": "params.data && Number(params.data.fsrm_eligibility_strength) >= 40 && Number(params.data.fsrm_eligibility_strength) < 70",
+                "fsrm-strong": "params.data && Number(params.data.fsrm_eligibility_strength) >= 70",
+            }
+        )
+    elif always == "milcon":
+        rules.update(
+            {
+                "milcon-weak": "params.data && Number(params.data.milcon_eligibility_strength) < 40",
+                "milcon-mid": "params.data && Number(params.data.milcon_eligibility_strength) >= 40 && Number(params.data.milcon_eligibility_strength) < 70",
+                "milcon-strong": "params.data && Number(params.data.milcon_eligibility_strength) >= 70",
+            }
+        )
+    else:
+        rules.update(
+            {
+                "fsrm-weak": "params.data && params.data.active_overlay == 'fsrm' && Number(params.data.fsrm_eligibility_strength) < 40",
+                "fsrm-mid": "params.data && params.data.active_overlay == 'fsrm' && Number(params.data.fsrm_eligibility_strength) >= 40 && Number(params.data.fsrm_eligibility_strength) < 70",
+                "fsrm-strong": "params.data && params.data.active_overlay == 'fsrm' && Number(params.data.fsrm_eligibility_strength) >= 70",
+                "milcon-weak": "params.data && params.data.active_overlay == 'milcon' && Number(params.data.milcon_eligibility_strength) < 40",
+                "milcon-mid": "params.data && params.data.active_overlay == 'milcon' && Number(params.data.milcon_eligibility_strength) >= 40 && Number(params.data.milcon_eligibility_strength) < 70",
+                "milcon-strong": "params.data && params.data.active_overlay == 'milcon' && Number(params.data.milcon_eligibility_strength) >= 70",
+            }
+        )
+    if include_score_default:
+        rules.update(
+            {
+                "score-low": "params.data && params.data.active_overlay == 'none' && Number(params.value) < 40",
+                "score-mid": "params.data && params.data.active_overlay == 'none' && Number(params.value) >= 40 && Number(params.value) < 70",
+                "score-high": "params.data && params.data.active_overlay == 'none' && Number(params.value) >= 70",
+            }
+        )
+    return rules
 
 
-def _number_rules(mode: str):
+def _score_col(field: str, header: str, width: int = 118):
     return {
-        f"mode-{mode}-number-low": f"params.data && params.data.active_color_mode == '{mode}' && Number(params.value) > 0 && Number(params.value) < 35",
-        f"mode-{mode}-number-medium": f"params.data && params.data.active_color_mode == '{mode}' && Number(params.value) >= 35 && Number(params.value) < 70",
-        f"mode-{mode}-number-high": f"params.data && params.data.active_color_mode == '{mode}' && Number(params.value) >= 70",
-        "blank-cell": "params.value == null || params.value === ''",
-    }
-
-
-def _flag_rules(mode: str):
-    return {
-        f"mode-{mode}-flag-true": f"params.data && params.data.active_color_mode == '{mode}' && params.value === true",
-        "flag-false": "params.value === false",
-        "blank-cell": "params.value == null || params.value === ''",
-    }
-
-
-def _col(field, header, mode=None, width=125, formatter=None, kind="metric"):
-    rules = {}
-    if mode and kind == "metric":
-        rules = _metric_rules(mode)
-    if mode and kind == "status":
-        rules = _status_rules(mode)
-    if mode and kind == "number":
-        rules = _number_rules(mode)
-    if mode and kind == "flag":
-        rules = _flag_rules(mode)
-    col = {
         "field": field,
         "headerName": header,
         "width": width,
-        "filter": True,
+        "filter": "agNumberColumnFilter",
+        "sortable": True,
+        "cellClassRules": _overlay_rules(include_score_default=True),
+        "valueFormatter": {"function": "return params.value == null ? '' : Math.round(Number(params.value));"},
+    }
+
+
+def _count_col(field: str, header: str, width: int = 118, gap_delta: bool = False):
+    rules = _overlay_rules()
+    if gap_delta:
+        rules["gap-delta"] = "params.data && params.data.has_unassigned_gap_delta === true"
+    formatter = (
+        "return params.value == null ? '' : Number(params.value).toLocaleString() + "
+        "(params.data && params.data.has_unassigned_gap_delta ? ' †' : '');"
+        if gap_delta
+        else "return params.value == null ? '' : Number(params.value).toLocaleString();"
+    )
+    return {
+        "field": field,
+        "headerName": header,
+        "width": width,
+        "filter": "agNumberColumnFilter",
         "sortable": True,
         "cellClassRules": rules,
+        "valueFormatter": {"function": formatter},
     }
-    if formatter:
-        col["valueFormatter"] = {"function": formatter}
-    return col
 
 
-def _group(header, summary_col, detail_cols):
+def _money_col(field: str, header: str):
+    return {
+        "field": field,
+        "headerName": header,
+        "width": 128,
+        "filter": "agNumberColumnFilter",
+        "sortable": True,
+        "cellClassRules": _overlay_rules(),
+        "valueFormatter": {"function": "return params.value == null ? '' : '$' + Number(params.value).toLocaleString() + 'M';"},
+    }
+
+
+def _group(header: str, summary_col: dict, detail_cols: list[dict]):
     return {
         "headerName": header,
         "marryChildren": True,
@@ -111,92 +123,135 @@ def _group(header, summary_col, detail_cols):
     }
 
 
-def build_column_defs():
-    money_formatter = "return params.value == null ? '' : '$' + Number(params.value).toLocaleString() + 'M';"
-    percent_formatter = "return params.value == null ? '' : Math.round(Number(params.value)) + '%';"
-    int_formatter = "return params.value == null ? '' : Number(params.value).toLocaleString();"
+def _initiative_label(field: str) -> str:
+    return field.replace("_progress", "").replace("_", " ").title()
 
+
+PINNED_COLUMNS = [
+    {
+        "field": "hierarchy_level",
+        "headerName": "Level",
+        "pinned": "left",
+        "width": 132,
+        "filter": True,
+        "cellClassRules": _level_class_rules(),
+    },
+    {
+        "field": "name",
+        "headerName": "Name",
+        "pinned": "left",
+        "width": 230,
+        "filter": True,
+        "cellClassRules": _level_class_rules(),
+        "valueFormatter": {
+            "function": """
+                const rank = params.data ? Number(params.data.level_rank || 0) : 0;
+                const hasKids = params.data && Number(params.data.children_count || 0) > 0;
+                const marker = hasKids ? (params.data.is_expanded ? '− ' : '+ ') : '  ';
+                return '  '.repeat(rank) + marker + (params.value || '');
+            """
+        },
+    },
+    {
+        "field": "type",
+        "headerName": "Type",
+        "pinned": "left",
+        "width": 126,
+        "filter": True,
+        "cellClassRules": _level_class_rules(),
+    },
+]
+
+
+def build_column_defs():
+    gap_detail_cols = [_count_col(f"gap_{category.lower().replace(' ', '_')}", category, 116) for category in GAP_CATEGORIES]
     return [
         *PINNED_COLUMNS,
-        _col("source_system", "Source System", width=150),
-        _col("gap_category", "Gap Category", width=145),
         _group(
-            "FSRM Eligibility",
-            _col("fsrm_likelihood", "FSRM", "fsrm"),
+            "REAF Score",
+            _score_col("reaf_composite", "REAF"),
             [
-                _col("fsrm_score", "Score", "fsrm", formatter=percent_formatter, kind="number"),
-                _col("fsrm_count", "Count", "fsrm", formatter=int_formatter, kind="number"),
-                _col("fsrm_ready_flag", "Ready", "fsrm", kind="flag"),
+                _score_col("reaf_r1_a", "R1 A"),
+                _score_col("reaf_r1_b", "R1 B"),
+                _score_col("reaf_r2_a", "R2 A"),
+                _score_col("reaf_r2_b", "R2 B"),
+                _score_col("reaf_r3_a", "R3 A"),
+                _score_col("reaf_r3_b", "R3 B"),
+                _score_col("reaf_r4_a", "R4 A"),
+                _score_col("reaf_r4_b", "R4 B"),
+                _score_col("reaf_r5_a", "R5 A"),
+                _score_col("reaf_r5_b", "R5 B"),
+            ],
+        ),
+        _group("Infrastructure Gaps", _count_col("gap_total", "Total Gaps", 132, gap_delta=True), gap_detail_cols),
+        _group(
+            "Funding Requests",
+            _money_col("funding_request_amount_m", "Requests"),
+            [
+                _count_col("funding_request_count", "Count", 110),
+                _money_col("funding_request_amount_m", "Amount"),
+                {
+                    "field": "source_system",
+                    "headerName": "Primary Source",
+                    "width": 150,
+                    "filter": True,
+                    "sortable": True,
+                },
             ],
         ),
         _group(
-            "MILCON Eligibility",
-            _col("milcon_likelihood", "MILCON", "milcon"),
+            "Building Condition",
+            _score_col("building_condition_score", "FCI/Eq."),
+            [_score_col("building_condition_score", "Condition Score"), {"field": "source_system", "headerName": "SMS Source", "width": 140, "filter": True}],
+        ),
+        _group(
+            "Power / Utility Availability",
+            _score_col("utility_availability_score", "Availability"),
+            [_score_col("utility_availability_score", "Normalized Score"), {"field": "note", "headerName": "Evidence Note", "width": 240, "filter": True}],
+        ),
+        _group(
+            "Initiative Progress",
+            _score_col("smart_meter_progress", "Progress"),
+            [_score_col(field, _initiative_label(field), 142) for field in INITIATIVES],
+        ),
+        _group(
+            "FSRM Eligible",
+            {
+                **_count_col("fsrm_eligible_count", "FSRM Count", 132),
+                "cellClassRules": _overlay_rules(always="fsrm"),
+            },
             [
-                _col("milcon_score", "Score", "milcon", formatter=percent_formatter, kind="number"),
-                _col("milcon_count", "Count", "milcon", formatter=int_formatter, kind="number"),
-                _col("milcon_ready_flag", "Ready", "milcon", kind="flag"),
+                {
+                    **_score_col("fsrm_eligibility_strength", "Strength"),
+                    "cellClassRules": _overlay_rules(always="fsrm"),
+                },
+                {
+                    "field": "fsrm_band",
+                    "headerName": "Band",
+                    "width": 100,
+                    "filter": True,
+                    "cellClassRules": _overlay_rules(always="fsrm"),
+                },
             ],
         ),
         _group(
-            "External Funding",
-            _col("external_funding_likelihood", "External", "external"),
+            "MILCON Eligible",
+            {
+                **_count_col("milcon_eligible_count", "MILCON Count", 140),
+                "cellClassRules": _overlay_rules(always="milcon"),
+            },
             [
-                _col("external_score", "Score", "external", formatter=percent_formatter, kind="number"),
-                _col("external_count", "Count", "external", formatter=int_formatter, kind="number"),
-                _col("external_partner_flag", "Partner", "external", kind="flag"),
-            ],
-        ),
-        _group(
-            "REEF/REAF Strategy Tags",
-            _col("reef_reaf_strategy_tag", "Strategy", width=210),
-            [
-                _col("gaps_tag", "GAPS Link", width=140),
-                _col("reason_evidence_note", "Evidence Note", width=300),
-            ],
-        ),
-        _group(
-            "GAPS Tags",
-            _col("gaps_tag", "GAPS", width=120),
-            [
-                _col("gap_category", "Category", width=130),
-                _col("source_system", "Source", width=140),
-            ],
-        ),
-        _group(
-            "Planning Maturity",
-            _col("planning_maturity", "Maturity", "planning", kind="status"),
-            [
-                _col("planning_score", "Score", "planning", formatter=percent_formatter, kind="number"),
-                _col("planning_doc_count", "Docs", "planning", formatter=int_formatter, kind="number"),
-                _col("planning_gap_flag", "Gap", "planning", kind="flag"),
-            ],
-        ),
-        _group(
-            "Redundancy / Partial Fulfillment",
-            _col("redundancy_status", "Redundancy", "redundancy", width=145, kind="status"),
-            [
-                _col("partial_fulfillment_status", "Partial Status", "redundancy", width=145, kind="status"),
-                _col("redundancy_score", "Score", "redundancy", formatter=percent_formatter, kind="number"),
-                _col("partial_fulfillment_flag", "Partial", "redundancy", kind="flag"),
-            ],
-        ),
-        _group(
-            "Cost Scale",
-            _col("cost_scale", "Cost", "cost"),
-            [
-                _col("cost_score", "Score", "cost", formatter=percent_formatter, kind="number"),
-                _col("rough_order_cost_m", "ROM", "cost", formatter=money_formatter, kind="number"),
-                _col("cost_confidence", "Confidence", width=130),
-            ],
-        ),
-        _group(
-            "Evidence Strength",
-            _col("evidence_strength", "Evidence", "evidence", kind="status"),
-            [
-                _col("evidence_score", "Score", "evidence", formatter=percent_formatter, kind="number"),
-                _col("evidence_count", "Count", "evidence", formatter=int_formatter, kind="number"),
-                _col("evidence_gap_flag", "Gap", "evidence", kind="flag"),
+                {
+                    **_score_col("milcon_eligibility_strength", "Strength"),
+                    "cellClassRules": _overlay_rules(always="milcon"),
+                },
+                {
+                    "field": "milcon_band",
+                    "headerName": "Band",
+                    "width": 100,
+                    "filter": True,
+                    "cellClassRules": _overlay_rules(always="milcon"),
+                },
             ],
         ),
     ]
@@ -214,9 +269,6 @@ GRID_OPTIONS = {
     "animateRows": False,
     "enableCellTextSelection": True,
     "suppressMenuHide": True,
+    "rowSelection": {"mode": "singleRow"},
     "sideBar": False,
 }
-
-
-def active_mode_fields(mode_key: str) -> list[str]:
-    return COLOR_MODES[mode_key]["fields"]

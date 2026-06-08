@@ -1,25 +1,34 @@
-"""Standalone Dash prototype for a spreadsheet-like infrastructure matrix."""
+"""Standalone Dash prototype for the resilience matrix tool."""
 
 from __future__ import annotations
 
 import dash
 import dash_ag_grid as dag
-from dash import Dash, Input, Output, dcc, html
+import pandas as pd
+from dash import Dash, Input, Output, State, dcc, html
 
-from charts import fsrm_vs_milcon, maturity_by_gap, redundancy_summary
-from color_modes import COLOR_MODES, legend_items, mode_options
+from charts import COUNT_DIMENSIONS, SCORED_INDICATORS, count_stacked_bar, scored_distribution
+from color_modes import OVERLAYS, legend_items, overlay_options
 from grid_config import GRID_OPTIONS, build_column_defs
-from synthetic_data import LEVEL_ORDER, build_synthetic_data
+from synthetic_data import (
+    LEVEL_FILTERS,
+    LEVEL_ORDER,
+    apply_role_scope,
+    build_synthetic_data,
+    descendants_for,
+    initial_expanded_ids,
+)
 
 
 BASE_DF = build_synthetic_data()
 
-LEVEL_FILTERS = {
-    "all": ["Enterprise", "Installation", "Mission", "Building"],
-    "installation": ["Enterprise", "Installation"],
-    "mission": ["Enterprise", "Installation", "Mission"],
-    "buildings": ["Building"],
-}
+ROLE_OPTIONS = [
+    {"label": "Enterprise user", "value": "enterprise"},
+    {"label": "ACC MAJCOM user", "value": "majcom_acc"},
+    {"label": "Nellis installation user", "value": "installation_nellis"},
+    {"label": "Nellis fighter mission user", "value": "mission_nellis_fighter"},
+    {"label": "Single asset user", "value": "asset_first"},
+]
 
 CSS = """
 :root {
@@ -38,7 +47,7 @@ body {
   font-family: var(--font-ui);
 }
 .app-shell {
-  max-width: 1780px;
+  max-width: 1860px;
   margin: 0 auto;
   padding: 22px 24px 34px;
 }
@@ -61,14 +70,17 @@ h1 {
   color: var(--muted);
   font-size: 13px;
 }
-.controls {
+.controls, .chart-controls {
   display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
-  gap: 14px;
+  gap: 12px;
 }
 .control-block {
-  min-width: 220px;
+  min-width: 200px;
+}
+.control-block.compact {
+  min-width: 130px;
 }
 .control-label {
   display: block;
@@ -78,21 +90,19 @@ h1 {
   letter-spacing: .07em;
   margin-bottom: 6px;
 }
-.level-buttons {
-  display: inline-flex;
+.button-row {
+  display: flex;
+  gap: 6px;
+}
+button {
   border: 1px solid var(--rule);
   background: var(--surface);
-}
-.level-buttons label {
-  border-right: 1px solid var(--rule);
+  color: var(--ink);
   padding: 8px 10px;
-  font-size: 12px;
+  cursor: pointer;
 }
-.level-buttons label:last-child {
-  border-right: 0;
-}
-.level-buttons input {
-  margin-right: 5px;
+button:hover {
+  border-color: var(--accent);
 }
 .legend {
   display: flex;
@@ -118,20 +128,33 @@ h1 {
   height: 12px;
   border: 1px solid rgba(0,0,0,.12);
 }
-.grid-wrap {
+.status-line {
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: auto;
+}
+.grid-wrap, .chart-panel {
   border: 1px solid var(--rule);
   background: var(--surface);
+}
+.chart-panel {
+  margin-top: 16px;
+  padding: 12px;
 }
 .charts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
   gap: 14px;
-  margin-top: 16px;
+  margin-top: 12px;
 }
-.chart-panel {
-  border: 1px solid var(--rule);
-  background: var(--surface);
+.chart-card {
   min-width: 0;
+  border: 1px solid color-mix(in oklab, var(--rule) 75%, white 25%);
+  background: #fff;
+}
+.pin-active {
+  border-color: #6b5b30;
+  box-shadow: inset 0 0 0 2px rgba(107, 91, 48, .18);
 }
 .ag-theme-quartz {
   --ag-font-family: var(--font-ui);
@@ -142,78 +165,68 @@ h1 {
   --ag-row-hover-color: #f1eadf;
   --ag-selected-row-background-color: #ede3d0;
 }
-.level-enterprise, .level-installation, .level-mission {
+.level-enterprise, .level-majcom, .level-installation, .level-mission {
   font-weight: 700;
 }
-.level-enterprise {
-  background: #ebe2d3;
-}
-.level-installation {
-  background: #f1eadf;
-}
-.level-mission {
-  background: #f7f1e8;
-}
-.level-building {
-  color: #34302b;
-}
+.level-enterprise { background: #e8dfcf; }
+.level-majcom { background: #eee6d8; }
+.level-installation { background: #f4eee4; }
+.level-mission { background: #f8f3ec; }
+.level-asset { color: #34302b; }
 .blank-cell {
   color: #9b9184;
   background: repeating-linear-gradient(135deg, #faf8f4, #faf8f4 6px, #f1eee8 6px, #f1eee8 12px);
 }
-.flag-false {
-  color: #7a7166;
+.score-low { background: #f2cbc7; }
+.score-mid { background: #eee2a3; }
+.score-high { background: #bdd9bd; }
+.fsrm-weak { background: #f1edf7; }
+.fsrm-mid { background: #cdb4db; }
+.fsrm-strong { background: #7c4d9f; color: white; }
+.milcon-weak { background: #f4f1e6; }
+.milcon-mid { background: #d4bd68; }
+.milcon-strong { background: #8a6d16; color: white; }
+.gap-delta {
+  font-weight: 700;
+  box-shadow: inset 0 -2px 0 #8a6d16;
 }
-.mode-fsrm-low { background: #f4eff9; }
-.mode-fsrm-medium { background: #d6bee8; }
-.mode-fsrm-high, .mode-fsrm-number-high, .mode-fsrm-flag-true { background: #8d5bb8; color: white; }
-.mode-fsrm-number-low { background: #f4eff9; }
-.mode-fsrm-number-medium { background: #d6bee8; }
-.mode-milcon-low { background: #f3f2ed; }
-.mode-milcon-medium { background: #d8ca8f; }
-.mode-milcon-high, .mode-milcon-number-high, .mode-milcon-flag-true { background: #9b7b1a; color: white; }
-.mode-milcon-number-low { background: #f3f2ed; }
-.mode-milcon-number-medium { background: #d8ca8f; }
-.mode-external-low { background: #edf5f5; }
-.mode-external-medium { background: #9ecdd0; }
-.mode-external-high, .mode-external-number-high, .mode-external-flag-true { background: #287f86; color: white; }
-.mode-external-number-low { background: #edf5f5; }
-.mode-external-number-medium { background: #9ecdd0; }
-.mode-planning-concept { background: #f6eeee; }
-.mode-planning-scoped, .mode-planning-number-medium { background: #ead7a7; }
-.mode-planning-programmed { background: #9fc6a2; }
-.mode-planning-validated, .mode-planning-number-high, .mode-planning-flag-true { background: #4f8b62; color: white; }
-.mode-planning-number-low { background: #f6eeee; }
-.mode-redundancy-single { background: #f1c7c0; }
-.mode-redundancy-partial, .mode-redundancy-number-medium, .mode-redundancy-flag-true { background: #ead7a7; }
-.mode-redundancy-redundant, .mode-redundancy-number-high { background: #79aa87; color: white; }
-.mode-redundancy-number-low { background: #f1c7c0; }
-.mode-cost-low, .mode-cost-number-low { background: #edf4ed; }
-.mode-cost-medium, .mode-cost-number-medium { background: #b8d0a3; }
-.mode-cost-high { background: #d8b15e; }
-.mode-cost-very-high, .mode-cost-number-high { background: #b96d47; color: white; }
-.mode-evidence-anecdotal, .mode-evidence-number-low { background: #f4eeee; }
-.mode-evidence-limited { background: #e7d7aa; }
-.mode-evidence-documented, .mode-evidence-number-medium { background: #a8c6db; }
-.mode-evidence-strong, .mode-evidence-number-high, .mode-evidence-flag-true { background: #5f8fb2; color: white; }
-@media (max-width: 1100px) {
+@media (max-width: 1200px) {
   .topbar { align-items: stretch; flex-direction: column; }
   .charts { grid-template-columns: 1fr; }
 }
 """
 
 
-def filtered_records(level_filter: str, color_mode: str):
-    levels = LEVEL_FILTERS[level_filter]
-    filtered = BASE_DF[BASE_DF["hierarchy_level"].isin(levels)].copy()
-    filtered["active_color_mode"] = color_mode
-    return filtered.where(filtered.notna(), None).to_dict("records")
+def scoped_df(role: str) -> pd.DataFrame:
+    return apply_role_scope(BASE_DF, role).copy()
+
+
+def visible_df(role: str, expanded_ids: list[str], depth: str, overlay: str) -> pd.DataFrame:
+    expanded = set(expanded_ids or [])
+    levels = LEVEL_FILTERS[depth]
+    df = scoped_df(role)
+
+    def is_visible(row) -> bool:
+        if row["hierarchy_level"] not in levels:
+            return False
+        path = row["path"]
+        ancestor_ids = ["|".join(path[:index]) for index in range(1, len(path))]
+        return all(ancestor in expanded for ancestor in ancestor_ids)
+
+    visible = df[df.apply(is_visible, axis=1)].copy()
+    visible["is_expanded"] = visible["row_id"].isin(expanded)
+    visible["active_overlay"] = overlay
+    return visible.where(visible.notna(), None)
+
+
+def records(df: pd.DataFrame) -> list[dict]:
+    return df.where(df.notna(), None).to_dict("records")
 
 
 def build_legend(mode_key: str):
     return html.Div(
         [
-            html.Span(f"Legend: {COLOR_MODES[mode_key]['label']}", className="legend-title"),
+            html.Span(f"Overlay: {OVERLAYS[mode_key]['label']}", className="legend-title"),
             *[
                 html.Span(
                     [html.Span(className="swatch", style={"background": color}), html.Span(label)],
@@ -226,6 +239,14 @@ def build_legend(mode_key: str):
     )
 
 
+def chart_scope_df(role: str, pinned_row_id: str | None, visible: pd.DataFrame) -> tuple[pd.DataFrame, str]:
+    if not pinned_row_id:
+        return visible, "Dynamic: charts follow visible expanded rows"
+    scope = descendants_for(scoped_df(role), pinned_row_id)
+    label = scope.iloc[0]["name"] if not scope.empty else pinned_row_id
+    return scope, f"Pinned: {label}"
+
+
 def create_app() -> Dash:
     app = dash.Dash(__name__)
     app.index_string = app.index_string.replace("</head>", f"<style>{CSS}</style></head>")
@@ -233,14 +254,16 @@ def create_app() -> Dash:
     app.layout = html.Div(
         className="app-shell",
         children=[
+            dcc.Store(id="expanded-ids", data=list(initial_expanded_ids(BASE_DF))),
+            dcc.Store(id="pinned-row-id", data=None),
             html.Div(
                 className="topbar",
                 children=[
                     html.Div(
                         [
-                            html.H1("Infrastructure Eligibility Matrix"),
+                            html.H1("Resilience Matrix Tool"),
                             html.P(
-                                "Standalone Dash AG Grid prototype using flattened hierarchy rows, grouped columns, pinned identifiers, and synthetic data.",
+                                "Dash AG Grid prototype for energy resilience indicators, infrastructure gaps, and funding eligibility.",
                                 className="subtitle",
                             ),
                         ]
@@ -251,31 +274,44 @@ def create_app() -> Dash:
                             html.Div(
                                 className="control-block",
                                 children=[
-                                    html.Label("Color mode", className="control-label"),
+                                    html.Label("Role scope", className="control-label"),
+                                    dcc.Dropdown(id="role-scope", options=ROLE_OPTIONS, value="enterprise", clearable=False),
+                                ],
+                            ),
+                            html.Div(
+                                className="control-block",
+                                children=[
+                                    html.Label("Funding overlay", className="control-label"),
+                                    dcc.Dropdown(id="overlay-mode", options=overlay_options(), value="none", clearable=False),
+                                ],
+                            ),
+                            html.Div(
+                                className="control-block",
+                                children=[
+                                    html.Label("Hierarchy depth", className="control-label"),
                                     dcc.Dropdown(
-                                        id="color-mode",
-                                        options=mode_options(),
-                                        value="fsrm",
+                                        id="depth-filter",
+                                        options=[
+                                            {"label": "Enterprise only", "value": "enterprise"},
+                                            {"label": "Through MAJCOM", "value": "majcom"},
+                                            {"label": "Through installation", "value": "installation"},
+                                            {"label": "Through mission", "value": "mission"},
+                                            {"label": "All levels", "value": "all"},
+                                        ],
+                                        value="all",
                                         clearable=False,
-                                        searchable=False,
                                     ),
                                 ],
                             ),
                             html.Div(
                                 children=[
-                                    html.Label("Hierarchy view", className="control-label"),
-                                    dcc.RadioItems(
-                                        id="level-filter",
-                                        className="level-buttons",
-                                        inputClassName="level-radio",
-                                        options=[
-                                            {"label": "All", "value": "all"},
-                                            {"label": "Through installation", "value": "installation"},
-                                            {"label": "Through mission", "value": "mission"},
-                                            {"label": "Buildings", "value": "buildings"},
+                                    html.Label("Expansion", className="control-label"),
+                                    html.Div(
+                                        className="button-row",
+                                        children=[
+                                            html.Button("Expand all", id="expand-all", n_clicks=0),
+                                            html.Button("Collapse", id="collapse-all", n_clicks=0),
                                         ],
-                                        value="all",
-                                        inline=True,
                                     ),
                                 ]
                             ),
@@ -291,43 +327,177 @@ def create_app() -> Dash:
                         id="matrix-grid",
                         className="ag-theme-quartz",
                         columnDefs=build_column_defs(),
-                        rowData=filtered_records("all", "fsrm"),
+                        rowData=records(visible_df("enterprise", list(initial_expanded_ids(BASE_DF)), "all", "none")),
                         getRowId="params.data.row_id",
                         dashGridOptions=GRID_OPTIONS,
                         dangerously_allow_code=True,
+                        selectedRows=[],
                         style={"height": "650px", "width": "100%"},
                     )
                 ],
             ),
             html.Div(
-                className="charts",
+                id="chart-panel",
+                className="chart-panel",
                 children=[
-                    html.Div(dcc.Graph(id="chart-fsrm-milcon", config={"displayModeBar": False}), className="chart-panel"),
-                    html.Div(dcc.Graph(id="chart-maturity", config={"displayModeBar": False}), className="chart-panel"),
-                    html.Div(dcc.Graph(id="chart-redundancy", config={"displayModeBar": False}), className="chart-panel"),
+                    html.Div(
+                        className="chart-controls",
+                        children=[
+                            html.Div(
+                                className="control-block compact",
+                                children=[
+                                    html.Label("Score chart", className="control-label"),
+                                    dcc.Dropdown(
+                                        id="score-chart-view",
+                                        options=[
+                                            {"label": "Composite", "value": "composite"},
+                                            {"label": "REAF multiples", "value": "small_multiples"},
+                                        ],
+                                        value="composite",
+                                        clearable=False,
+                                    ),
+                                ],
+                            ),
+                            html.Div(
+                                className="control-block compact",
+                                children=[
+                                    html.Label("Series page", className="control-label"),
+                                    dcc.Slider(id="series-window", min=0, max=3, step=1, value=0, marks=None, tooltip={"placement": "bottom"}),
+                                ],
+                            ),
+                            html.Div(
+                                className="control-block",
+                                children=[
+                                    html.Label("Locked score references", className="control-label"),
+                                    dcc.Dropdown(
+                                        id="locked-series",
+                                        options=[{"label": label, "value": field} for field, label in SCORED_INDICATORS],
+                                        value=[],
+                                        multi=True,
+                                    ),
+                                ],
+                            ),
+                            html.Div(
+                                className="control-block compact",
+                                children=[
+                                    html.Label("Count X", className="control-label"),
+                                    dcc.Dropdown(
+                                        id="count-x",
+                                        options=[{"label": label, "value": value} for value, label in COUNT_DIMENSIONS.items()],
+                                        value="installation",
+                                        clearable=False,
+                                    ),
+                                ],
+                            ),
+                            html.Div(
+                                className="control-block compact",
+                                children=[
+                                    html.Label("Stack by", className="control-label"),
+                                    dcc.Dropdown(
+                                        id="count-stack",
+                                        options=[{"label": label, "value": value} for value, label in COUNT_DIMENSIONS.items()],
+                                        value="gap_category",
+                                        clearable=False,
+                                    ),
+                                ],
+                            ),
+                            html.Div(
+                                children=[
+                                    html.Label("Chart pin", className="control-label"),
+                                    html.Div(
+                                        className="button-row",
+                                        children=[
+                                            html.Button("Pin selected", id="pin-chart", n_clicks=0),
+                                            html.Button("Unpin", id="unpin-chart", n_clicks=0),
+                                        ],
+                                    ),
+                                ]
+                            ),
+                            html.Div(id="pin-status", className="status-line"),
+                        ],
+                    ),
+                    html.Div(
+                        className="charts",
+                        children=[
+                            html.Div(dcc.Graph(id="score-chart", config={"displayModeBar": False}), className="chart-card"),
+                            html.Div(dcc.Graph(id="count-chart", config={"displayModeBar": False}), className="chart-card"),
+                        ],
+                    ),
                 ],
             ),
         ],
     )
 
     @app.callback(
+        Output("expanded-ids", "data"),
+        Input("matrix-grid", "cellClicked"),
+        Input("expand-all", "n_clicks"),
+        Input("collapse-all", "n_clicks"),
+        Input("role-scope", "value"),
+        State("expanded-ids", "data"),
+    )
+    def update_expansion(cell, _expand_clicks, _collapse_clicks, role, expanded_ids):
+        trigger = dash.ctx.triggered_id
+        df = scoped_df(role)
+        if trigger == "expand-all":
+            return df.loc[df["children_count"] > 0, "row_id"].tolist()
+        if trigger in ["collapse-all", "role-scope"]:
+            return df.loc[df["hierarchy_level"] == "Enterprise", "row_id"].tolist()
+        expanded = set(expanded_ids or [])
+        if trigger == "matrix-grid" and cell and cell.get("colId") == "name":
+            row = cell.get("data", {})
+            row_id = row.get("row_id")
+            if row.get("children_count", 0) > 0 and row_id:
+                if row_id in expanded:
+                    expanded.remove(row_id)
+                else:
+                    expanded.add(row_id)
+        return list(expanded)
+
+    @app.callback(
+        Output("pinned-row-id", "data"),
+        Input("pin-chart", "n_clicks"),
+        Input("unpin-chart", "n_clicks"),
+        State("matrix-grid", "selectedRows"),
+        State("pinned-row-id", "data"),
+    )
+    def update_pin(_pin_clicks, _unpin_clicks, selected_rows, pinned_id):
+        trigger = dash.ctx.triggered_id
+        if trigger == "unpin-chart":
+            return None
+        if trigger == "pin-chart" and selected_rows:
+            return selected_rows[0].get("row_id")
+        return pinned_id
+
+    @app.callback(
         Output("matrix-grid", "rowData"),
         Output("legend", "children"),
-        Output("chart-fsrm-milcon", "figure"),
-        Output("chart-maturity", "figure"),
-        Output("chart-redundancy", "figure"),
-        Input("level-filter", "value"),
-        Input("color-mode", "value"),
+        Output("chart-panel", "className"),
+        Output("pin-status", "children"),
+        Output("score-chart", "figure"),
+        Output("count-chart", "figure"),
+        Input("expanded-ids", "data"),
+        Input("overlay-mode", "value"),
+        Input("role-scope", "value"),
+        Input("depth-filter", "value"),
+        Input("pinned-row-id", "data"),
+        Input("score-chart-view", "value"),
+        Input("series-window", "value"),
+        Input("locked-series", "value"),
+        Input("count-x", "value"),
+        Input("count-stack", "value"),
     )
-    def update_view(level_filter, color_mode):
-        row_data = filtered_records(level_filter, color_mode)
-        chart_df = BASE_DF[BASE_DF["hierarchy_level"].isin(LEVEL_FILTERS[level_filter])]
+    def update_view(expanded_ids, overlay, role, depth, pinned_row_id, score_view, series_window, locked_series, count_x, count_stack):
+        visible = visible_df(role, expanded_ids, depth, overlay)
+        chart_df, pin_status = chart_scope_df(role, pinned_row_id, visible)
+        chart_panel_class = "chart-panel pin-active" if pinned_row_id else "chart-panel"
         return (
-            row_data,
-            build_legend(color_mode),
-            fsrm_vs_milcon(chart_df),
-            maturity_by_gap(chart_df),
-            redundancy_summary(chart_df),
+            records(visible),
+            build_legend(overlay),
+            chart_panel_class,
+            pin_status,
+            scored_distribution(chart_df, score_view, series_window, locked_series),
+            count_stacked_bar(chart_df, count_x, count_stack),
         )
 
     return app

@@ -1,55 +1,91 @@
-"""Synthetic infrastructure hierarchy and metric data for the matrix prototype."""
+"""Synthetic resilience matrix data with five-level hierarchy and rollups."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import random
-from typing import Iterable
+from collections.abc import Iterable
 
 import pandas as pd
 
 
-LEVEL_ORDER = {"Enterprise": 0, "Installation": 1, "Mission": 2, "Building": 3}
-LIKELIHOOD_ORDER = {"Low": 1, "Medium": 2, "High": 3}
-MATURITY_ORDER = {"Concept": 1, "Scoped": 2, "Programmed": 3, "Validated": 4}
-REDUNDANCY_ORDER = {"Single point": 1, "Partial": 2, "Redundant": 3}
-EVIDENCE_ORDER = {"Anecdotal": 1, "Limited": 2, "Documented": 3, "Strong": 4}
-COST_ORDER = {"Low": 1, "Medium": 2, "High": 3, "Very high": 4}
+LEVEL_ORDER = {
+    "Enterprise": 0,
+    "MAJCOM": 1,
+    "Installation": 2,
+    "Mission": 3,
+    "Building/Asset": 4,
+}
 
+LEVEL_FILTERS = {
+    "enterprise": ["Enterprise"],
+    "majcom": ["Enterprise", "MAJCOM"],
+    "installation": ["Enterprise", "MAJCOM", "Installation"],
+    "mission": ["Enterprise", "MAJCOM", "Installation", "Mission"],
+    "all": ["Enterprise", "MAJCOM", "Installation", "Mission", "Building/Asset"],
+}
 
-@dataclass(frozen=True)
-class BuildingSeed:
-    enterprise: str
-    installation: str
-    mission: str
-    building: str
+REAF_COMPONENTS = [
+    "reaf_r1_a",
+    "reaf_r1_b",
+    "reaf_r2_a",
+    "reaf_r2_b",
+    "reaf_r3_a",
+    "reaf_r3_b",
+    "reaf_r4_a",
+    "reaf_r4_b",
+    "reaf_r5_a",
+    "reaf_r5_b",
+]
+
+GAP_CATEGORIES = [
+    "HVAC",
+    "Electrical",
+    "Water",
+    "Fuel",
+    "Controls",
+    "Envelope",
+    "Backup Power",
+    "Cyber",
+]
+
+INITIATIVES = [
+    "smart_meter_progress",
+    "microgrid_progress",
+    "backup_power_progress",
+]
+
+SCORED_FIELDS = [
+    "reaf_composite",
+    *REAF_COMPONENTS,
+    "building_condition_score",
+    "utility_availability_score",
+    *INITIATIVES,
+]
+
+COUNT_FIELDS = [
+    "gap_total",
+    *[f"gap_{category.lower().replace(' ', '_')}" for category in GAP_CATEGORIES],
+    "funding_request_count",
+    "funding_request_amount_m",
+    "fsrm_eligible_count",
+    "milcon_eligible_count",
+]
+
+ROLLUP_AVG_FIELDS = [
+    "reaf_composite",
+    *REAF_COMPONENTS,
+    "building_condition_score",
+    "utility_availability_score",
+    *INITIATIVES,
+    "fsrm_eligibility_strength",
+    "milcon_eligibility_strength",
+]
+
+ROLLUP_SUM_FIELDS = COUNT_FIELDS + ["unassigned_gap_count"]
 
 
 def _choice(rng: random.Random, values: list[str], weights: list[int] | None = None) -> str:
     return rng.choices(values, weights=weights, k=1)[0]
-
-
-def _score_for(label: str | None, order: dict[str, int], scale: int = 100) -> int | None:
-    if not label:
-        return None
-    return round(order[label] / max(order.values()) * scale)
-
-
-def _most_common(values: Iterable[str | None]) -> str | None:
-    counts: dict[str, int] = {}
-    for value in values:
-        if value:
-            counts[value] = counts.get(value, 0) + 1
-    if not counts:
-        return None
-    return max(counts.items(), key=lambda item: item[1])[0]
-
-
-def _max_label(values: Iterable[str | None], order: dict[str, int]) -> str | None:
-    valid = [value for value in values if value in order]
-    if not valid:
-        return None
-    return max(valid, key=lambda value: order[value])
 
 
 def _avg(values: Iterable[float | int | None]) -> float | None:
@@ -59,170 +95,233 @@ def _avg(values: Iterable[float | int | None]) -> float | None:
     return round(sum(valid) / len(valid), 1)
 
 
-def _building_rows(seed: int = 42) -> list[dict]:
+def _sum(values: Iterable[float | int | None]) -> float:
+    valid = [value for value in values if value is not None and not pd.isna(value)]
+    return round(sum(valid), 1)
+
+
+def _score(rng: random.Random, low: int = 20, high: int = 96) -> int:
+    return rng.randint(low, high)
+
+
+def _score_band(score: float | int | None) -> str | None:
+    if score is None or pd.isna(score):
+        return None
+    if score < 40:
+        return "Low"
+    if score < 70:
+        return "Medium"
+    return "High"
+
+
+def _gap_field(category: str) -> str:
+    return f"gap_{category.lower().replace(' ', '_')}"
+
+
+def _node_id(*parts: str) -> str:
+    return "|".join(part.replace("|", "-") for part in parts if part)
+
+
+def _asset_rows(seed: int = 7) -> pd.DataFrame:
     rng = random.Random(seed)
-    enterprises = ["Continental Portfolio", "Pacific Portfolio"]
-    installations = {
-        "Continental Portfolio": ["Fort Adams", "Camp Meridian", "Base Sentinel"],
-        "Pacific Portfolio": ["Joint Station Harbor", "Outpost Summit", "Depot Horizon"],
+    enterprises = ["Air Force Enterprise"]
+    majcoms = {
+        "Air Force Enterprise": ["ACC", "AETC", "PACAF"],
     }
-    missions = ["Power Projection", "Cyber Operations", "Logistics", "Training"]
-    source_systems = [" BUILDER SMS", "HQIIS", "ePRISMS", "Manual Survey"]
-    gap_categories = ["Capacity", "Resilience", "Compliance", "Safety", "Modernization"]
-    strategies = ["REEF: Reduce Demand", "REAF: Harden Critical Node", "REEF: Sequence Sustainment", "REAF: Add Backup Path"]
-    gaps_tags = ["Energy", "Water", "Access", "Life Safety", "Mission Assurance"]
-    maturity = list(MATURITY_ORDER)
-    redundancy = list(REDUNDANCY_ORDER)
-    cost = list(COST_ORDER)
-    evidence = list(EVIDENCE_ORDER)
-    likelihood = list(LIKELIHOOD_ORDER)
+    installations = {
+        "ACC": ["Nellis AFB", "Langley AFB", "Davis-Monthan AFB"],
+        "AETC": ["Lackland AFB", "Sheppard AFB", "Keesler AFB"],
+        "PACAF": ["Kadena AB", "Eielson AFB", "Andersen AFB"],
+    }
+    missions = ["Fighter Operations", "Training", "Cyber Operations", "Logistics", "Command Support"]
+    asset_types = ["Hangar", "Operations", "Utility Plant", "Dormitory", "Warehouse", "Clinic"]
+    source_systems = ["BUILDER SMS", "NexGen IT", "AMP", "Power Study", "Manual Survey"]
 
-    seeds: list[BuildingSeed] = []
+    rows: list[dict] = []
+    asset_index = 1
     for enterprise in enterprises:
-        for installation in installations[enterprise]:
-            for mission in rng.sample(missions, 3):
-                for idx in range(1, rng.randint(3, 5)):
-                    seeds.append(
-                        BuildingSeed(
-                            enterprise=enterprise,
-                            installation=installation,
-                            mission=mission,
-                            building=f"B{rng.randint(100, 899)}-{idx}",
+        for majcom in majcoms[enterprise]:
+            for installation in installations[majcom]:
+                for mission in rng.sample(missions, 3):
+                    for asset_offset in range(rng.randint(3, 5)):
+                        gap_counts = {field: rng.randint(0, 3) for field in [_gap_field(category) for category in GAP_CATEGORIES]}
+                        gap_total = sum(gap_counts.values())
+                        building_condition = _score(rng, 22, 94)
+                        utility_score = _score(rng, 25, 98)
+                        fsrm_strength = min(100, round(gap_total * 8 + (100 - building_condition) * 0.55 + rng.randint(0, 16)))
+                        milcon_strength = min(100, round(gap_total * 5 + max(0, 65 - utility_score) * 0.75 + rng.randint(0, 18)))
+                        funding_count = rng.randint(0, 5)
+                        asset_name = f"{installation[:3].upper()}-{100 + asset_index}"
+                        node_id = _node_id(enterprise, majcom, installation, mission, asset_name)
+
+                        rows.append(
+                            {
+                                "row_id": node_id,
+                                "parent_id": _node_id(enterprise, majcom, installation, mission),
+                                "path": [enterprise, majcom, installation, mission, asset_name],
+                                "hierarchy_level": "Building/Asset",
+                                "level_rank": LEVEL_ORDER["Building/Asset"],
+                                "name": asset_name,
+                                "type": _choice(rng, asset_types),
+                                "enterprise": enterprise,
+                                "majcom": majcom,
+                                "installation": installation,
+                                "mission": mission,
+                                "building_asset": asset_name,
+                                "source_system": _choice(rng, source_systems),
+                                "reaf_composite": None,
+                                **{field: None for field in REAF_COMPONENTS},
+                                "gap_total": gap_total,
+                                **gap_counts,
+                                "unassigned_gap_count": 0,
+                                "has_unassigned_gap_delta": False,
+                                "funding_request_count": funding_count,
+                                "funding_request_amount_m": round(funding_count * rng.uniform(0.4, 4.8), 1),
+                                "building_condition_score": building_condition,
+                                "utility_availability_score": utility_score,
+                                "smart_meter_progress": _score(rng, 5, 100),
+                                "microgrid_progress": _score(rng, 0, 88),
+                                "backup_power_progress": _score(rng, 15, 100),
+                                "fsrm_eligible_count": rng.randint(0, max(1, gap_total)),
+                                "milcon_eligible_count": rng.randint(0, max(1, gap_total // 2 + 1)),
+                                "fsrm_eligibility_strength": fsrm_strength,
+                                "milcon_eligibility_strength": milcon_strength,
+                                "fsrm_band": _score_band(fsrm_strength),
+                                "milcon_band": _score_band(milcon_strength),
+                                "rbac_enterprise": enterprise,
+                                "rbac_majcom": majcom,
+                                "rbac_installation": installation,
+                                "rbac_mission": mission,
+                                "rbac_asset": asset_name,
+                                "note": "Asset-level source record; REAF is unavailable at this resolution.",
+                            }
                         )
-                    )
+                        asset_index += 1
+    return pd.DataFrame(rows)
 
+
+def _mission_reaf_rows(asset_df: pd.DataFrame, seed: int = 19) -> dict[str, dict[str, int]]:
+    rng = random.Random(seed)
+    mission_scores: dict[str, dict[str, int]] = {}
+    for keys, _group in asset_df.groupby(["enterprise", "majcom", "installation", "mission"], sort=True):
+        mission_id = _node_id(*keys)
+        component_scores = {field: _score(rng, 24, 96) for field in REAF_COMPONENTS}
+        component_scores["reaf_composite"] = round(sum(component_scores.values()) / len(REAF_COMPONENTS))
+        mission_scores[mission_id] = component_scores
+    return mission_scores
+
+
+def _aggregate(asset_df: pd.DataFrame, level: str, group_cols: list[str], mission_reaf: dict[str, dict[str, int]]) -> pd.DataFrame:
     rows = []
-    for index, item in enumerate(seeds, start=1):
-        fsrm = _choice(rng, likelihood, [3, 5, 4])
-        milcon = _choice(rng, likelihood, [5, 4, 2])
-        external = _choice(rng, likelihood, [4, 4, 3])
-        plan = _choice(rng, maturity, [4, 5, 4, 2])
-        red = _choice(rng, redundancy, [4, 4, 3])
-        partial = _choice(rng, ["None", "Partial", "Substantial"], [3, 5, 2])
-        cost_scale = _choice(rng, cost, [3, 5, 4, 2])
-        evidence_strength = _choice(rng, evidence, [2, 4, 5, 3])
-        applies_to_milcon = rng.random() > 0.18
-        applies_to_external = rng.random() > 0.12
-
-        rows.append(
-            {
-                "row_id": f"building-{index}",
-                "hierarchy_level": "Building",
-                "level_rank": LEVEL_ORDER["Building"],
-                "enterprise": item.enterprise,
-                "installation": item.installation,
-                "mission": item.mission,
-                "building": item.building,
-                "hierarchy_label": item.building,
-                "source_system": _choice(rng, source_systems),
-                "gap_category": _choice(rng, gap_categories),
-                "reef_reaf_strategy_tag": _choice(rng, strategies),
-                "gaps_tag": _choice(rng, gaps_tags),
-                "fsrm_likelihood": fsrm,
-                "milcon_likelihood": milcon if applies_to_milcon else None,
-                "external_funding_likelihood": external if applies_to_external else None,
-                "planning_maturity": plan,
-                "redundancy_status": red,
-                "partial_fulfillment_status": partial,
-                "cost_scale": cost_scale,
-                "evidence_strength": evidence_strength,
-                "fsrm_count": rng.randint(0, 8),
-                "milcon_count": rng.randint(0, 4) if applies_to_milcon else None,
-                "external_count": rng.randint(0, 5) if applies_to_external else None,
-                "planning_doc_count": rng.randint(0, 6),
-                "evidence_count": rng.randint(0, 9),
-                "rough_order_cost_m": round(rng.uniform(0.4, 28.0), 1),
-                "fsrm_score": _score_for(fsrm, LIKELIHOOD_ORDER),
-                "milcon_score": _score_for(milcon, LIKELIHOOD_ORDER) if applies_to_milcon else None,
-                "external_score": _score_for(external, LIKELIHOOD_ORDER) if applies_to_external else None,
-                "planning_score": _score_for(plan, MATURITY_ORDER),
-                "redundancy_score": _score_for(red, REDUNDANCY_ORDER),
-                "cost_score": _score_for(cost_scale, COST_ORDER),
-                "evidence_score": _score_for(evidence_strength, EVIDENCE_ORDER),
-                "fsrm_ready_flag": fsrm == "High" and plan in ["Programmed", "Validated"],
-                "milcon_ready_flag": applies_to_milcon and milcon == "High" and cost_scale in ["High", "Very high"],
-                "external_partner_flag": applies_to_external and external in ["Medium", "High"],
-                "planning_gap_flag": plan in ["Concept", "Scoped"],
-                "partial_fulfillment_flag": partial in ["Partial", "Substantial"],
-                "evidence_gap_flag": evidence_strength in ["Anecdotal", "Limited"],
-                "cost_confidence": _choice(rng, ["Low", "Medium", "High"], [2, 4, 4]),
-                "reason_evidence_note": f"{_choice(rng, gap_categories)} need from {_choice(rng, source_systems).strip()} with {_choice(rng, evidence).lower()} evidence.",
-            }
-        )
-    return rows
-
-
-def _aggregate_rows(buildings: pd.DataFrame, level: str, group_cols: list[str]) -> list[dict]:
-    rows = []
-    for keys, group in buildings.groupby(group_cols, sort=True, dropna=False):
+    rng = random.Random(31 + LEVEL_ORDER[level])
+    for keys, group in asset_df.groupby(group_cols, sort=True):
         if not isinstance(keys, tuple):
             keys = (keys,)
         context = dict(zip(group_cols, keys))
-        label = context[group_cols[-1]]
-        row_id = f"{level.lower()}-" + "-".join(str(key).replace(" ", "_") for key in keys)
+        row_id = _node_id(*[str(context[col]) for col in group_cols])
+        parent_cols = group_cols[:-1]
+        parent_id = _node_id(*[str(context[col]) for col in parent_cols]) if parent_cols else None
+        unassigned_gap_count = rng.randint(1, 10) if level == "Mission" else int(_sum(group["unassigned_gap_count"]))
 
         row = {
             "row_id": row_id,
+            "parent_id": parent_id,
+            "path": [str(context[col]) for col in group_cols],
             "hierarchy_level": level,
             "level_rank": LEVEL_ORDER[level],
+            "name": str(context[group_cols[-1]]),
+            "type": "Rollup",
             "enterprise": context.get("enterprise"),
+            "majcom": context.get("majcom"),
             "installation": context.get("installation"),
             "mission": context.get("mission"),
-            "building": None,
-            "hierarchy_label": label,
-            "source_system": _most_common(group["source_system"]),
-            "gap_category": _most_common(group["gap_category"]),
-            "reef_reaf_strategy_tag": _most_common(group["reef_reaf_strategy_tag"]),
-            "gaps_tag": _most_common(group["gaps_tag"]),
-            "fsrm_likelihood": _max_label(group["fsrm_likelihood"], LIKELIHOOD_ORDER),
-            "milcon_likelihood": _max_label(group["milcon_likelihood"], LIKELIHOOD_ORDER),
-            "external_funding_likelihood": _max_label(group["external_funding_likelihood"], LIKELIHOOD_ORDER),
-            "planning_maturity": _max_label(group["planning_maturity"], MATURITY_ORDER),
-            "redundancy_status": _max_label(group["redundancy_status"], REDUNDANCY_ORDER),
-            "partial_fulfillment_status": _most_common(group["partial_fulfillment_status"]),
-            "cost_scale": _max_label(group["cost_scale"], COST_ORDER),
-            "evidence_strength": _max_label(group["evidence_strength"], EVIDENCE_ORDER),
-            "fsrm_count": int(group["fsrm_count"].fillna(0).sum()),
-            "milcon_count": int(group["milcon_count"].fillna(0).sum()),
-            "external_count": int(group["external_count"].fillna(0).sum()),
-            "planning_doc_count": int(group["planning_doc_count"].fillna(0).sum()),
-            "evidence_count": int(group["evidence_count"].fillna(0).sum()),
-            "rough_order_cost_m": round(group["rough_order_cost_m"].fillna(0).sum(), 1),
-            "fsrm_score": _avg(group["fsrm_score"]),
-            "milcon_score": _avg(group["milcon_score"]),
-            "external_score": _avg(group["external_score"]),
-            "planning_score": _avg(group["planning_score"]),
-            "redundancy_score": _avg(group["redundancy_score"]),
-            "cost_score": _avg(group["cost_score"]),
-            "evidence_score": _avg(group["evidence_score"]),
-            "fsrm_ready_flag": bool(group["fsrm_ready_flag"].any()),
-            "milcon_ready_flag": bool(group["milcon_ready_flag"].any()),
-            "external_partner_flag": bool(group["external_partner_flag"].any()),
-            "planning_gap_flag": bool(group["planning_gap_flag"].any()),
-            "partial_fulfillment_flag": bool(group["partial_fulfillment_flag"].any()),
-            "evidence_gap_flag": bool(group["evidence_gap_flag"].any()),
-            "cost_confidence": _most_common(group["cost_confidence"]),
-            "reason_evidence_note": f"Aggregate of {len(group)} building records; values show max status or summed counts.",
+            "building_asset": None,
+            "source_system": "Rollup",
+            "unassigned_gap_count": unassigned_gap_count,
+            "has_unassigned_gap_delta": bool(unassigned_gap_count > 0 and level == "Mission"),
+            "rbac_enterprise": context.get("enterprise"),
+            "rbac_majcom": context.get("majcom"),
+            "rbac_installation": context.get("installation"),
+            "rbac_mission": context.get("mission"),
+            "rbac_asset": None,
+            "note": "Rollup row.",
         }
-        if level == "Enterprise":
-            row["installation"] = None
-            row["mission"] = None
-        if level == "Installation":
-            row["mission"] = None
+
+        for field in ROLLUP_SUM_FIELDS:
+            if field == "unassigned_gap_count":
+                continue
+            row[field] = _sum(group[field])
+        row["gap_total"] = row["gap_total"] + unassigned_gap_count
+
+        if level == "Mission":
+            row.update(mission_reaf[row_id])
+        else:
+            child_group_cols = ["enterprise", "majcom", "installation", "mission"]
+            child_scores = []
+            for child_keys, _child_group in group.groupby(child_group_cols, sort=True):
+                child_scores.append(mission_reaf[_node_id(*child_keys)])
+            for field in ["reaf_composite", *REAF_COMPONENTS]:
+                row[field] = _avg(score[field] for score in child_scores)
+
+        for field in ["building_condition_score", "utility_availability_score", *INITIATIVES]:
+            row[field] = _avg(group[field])
+        row["fsrm_eligibility_strength"] = _avg(group["fsrm_eligibility_strength"])
+        row["milcon_eligibility_strength"] = _avg(group["milcon_eligibility_strength"])
+        row["fsrm_band"] = _score_band(row["fsrm_eligibility_strength"])
+        row["milcon_band"] = _score_band(row["milcon_eligibility_strength"])
         rows.append(row)
-    return rows
+    return pd.DataFrame(rows)
 
 
 def build_synthetic_data() -> pd.DataFrame:
-    buildings = pd.DataFrame(_building_rows())
-    aggregate_rows = []
-    aggregate_rows.extend(_aggregate_rows(buildings, "Enterprise", ["enterprise"]))
-    aggregate_rows.extend(_aggregate_rows(buildings, "Installation", ["enterprise", "installation"]))
-    aggregate_rows.extend(_aggregate_rows(buildings, "Mission", ["enterprise", "installation", "mission"]))
+    assets = _asset_rows()
+    mission_reaf = _mission_reaf_rows(assets)
+    missions = _aggregate(assets, "Mission", ["enterprise", "majcom", "installation", "mission"], mission_reaf)
+    installations = _aggregate(assets, "Installation", ["enterprise", "majcom", "installation"], mission_reaf)
+    majcoms = _aggregate(assets, "MAJCOM", ["enterprise", "majcom"], mission_reaf)
+    enterprise = _aggregate(assets, "Enterprise", ["enterprise"], mission_reaf)
+    df = pd.concat([enterprise, majcoms, installations, missions, assets], ignore_index=True)
 
-    df = pd.concat([pd.DataFrame(aggregate_rows), buildings], ignore_index=True)
+    df["children_count"] = df["row_id"].map(df.groupby("parent_id").size()).fillna(0).astype(int)
     df = df.sort_values(
-        ["enterprise", "installation", "mission", "level_rank", "building"],
+        ["enterprise", "majcom", "installation", "mission", "level_rank", "building_asset"],
         na_position="first",
     ).reset_index(drop=True)
+    return df.where(df.notna(), None)
+
+
+def initial_expanded_ids(df: pd.DataFrame) -> set[str]:
+    return set(df.loc[df["hierarchy_level"].isin(["Enterprise", "MAJCOM", "Installation"]), "row_id"])
+
+
+def descendants_for(df: pd.DataFrame, row_id: str) -> pd.DataFrame:
+    row = df[df["row_id"] == row_id]
+    if row.empty:
+        return df.iloc[0:0]
+    path = row.iloc[0]["path"]
+    mask = df["path"].apply(lambda value: value[: len(path)] == path)
+    return df[mask]
+
+
+def apply_role_scope(df: pd.DataFrame, role: str) -> pd.DataFrame:
+    if role == "enterprise":
+        return df
+    if role == "majcom_acc":
+        return df[(df["rbac_majcom"].isna()) | (df["rbac_majcom"] == "ACC")]
+    if role == "installation_nellis":
+        return df[
+            df["hierarchy_level"].isin(["Enterprise", "MAJCOM"])
+            | (df["rbac_installation"] == "Nellis AFB")
+        ]
+    if role == "mission_nellis_fighter":
+        return df[
+            df["hierarchy_level"].isin(["Enterprise", "MAJCOM", "Installation"])
+            | ((df["rbac_installation"] == "Nellis AFB") & (df["rbac_mission"] == "Fighter Operations"))
+        ]
+    if role == "asset_first":
+        first_asset = df[df["hierarchy_level"] == "Building/Asset"].iloc[0]
+        return df[
+            df["hierarchy_level"].isin(["Enterprise", "MAJCOM", "Installation", "Mission"])
+            | (df["rbac_asset"] == first_asset["rbac_asset"])
+        ]
     return df
