@@ -112,6 +112,47 @@ def _money_col(field: str, header: str):
     }
 
 
+def _text_col(field: str, header: str, width: int = 118):
+    return {
+        "field": field,
+        "headerName": header,
+        "width": width,
+        "filter": True,
+        "sortable": True,
+        "cellClassRules": _overlay_rules(),
+    }
+
+
+def _yes_no_col(field: str, header: str, width: int = 118):
+    return {
+        "field": field,
+        "headerName": header,
+        "width": width,
+        "filter": True,
+        "sortable": True,
+        "cellClassRules": _overlay_rules(),
+        "valueFormatter": {
+            "function": (
+                "if (params.value == null || params.value === '') { return ''; } "
+                "if (params.data && params.data.hierarchy_level == 'Building/Asset') { return params.value; } "
+                "return Number(params.value).toLocaleString();"
+            )
+        },
+    }
+
+
+def _year_col(field: str, header: str, width: int = 112):
+    return {
+        "field": field,
+        "headerName": header,
+        "width": width,
+        "filter": "agNumberColumnFilter",
+        "sortable": True,
+        "cellClassRules": _overlay_rules(),
+        "valueFormatter": {"function": "return params.value == null ? '' : String(Math.round(Number(params.value)));"},
+    }
+
+
 def _group(header: str, summary_col: dict, detail_cols: list[dict]):
     return {
         "headerName": header,
@@ -128,38 +169,35 @@ def _initiative_label(field: str) -> str:
 
 
 PINNED_COLUMNS = [
-    {
-        "field": "hierarchy_level",
-        "headerName": "Level",
-        "pinned": "left",
-        "width": 132,
-        "filter": True,
-        "cellClassRules": _level_class_rules(),
-    },
-    {
-        "field": "name",
-        "headerName": "Name",
-        "pinned": "left",
-        "width": 230,
-        "filter": True,
-        "cellClassRules": _level_class_rules(),
-        "valueFormatter": {
-            "function": """
-                const rank = params.data ? Number(params.data.level_rank || 0) : 0;
-                const hasKids = params.data && Number(params.data.children_count || 0) > 0;
-                const marker = hasKids ? (params.data.is_expanded ? '− ' : '+ ') : '  ';
-                return '  '.repeat(rank) + marker + (params.value || '');
-            """
+    _group(
+        "Level / Type",
+        {
+            "field": "row_meta",
+            "headerName": "Level / Type",
+            "pinned": "left",
+            "width": 168,
+            "filter": True,
+            "cellClassRules": _level_class_rules(),
         },
-    },
-    {
-        "field": "type",
-        "headerName": "Type",
-        "pinned": "left",
-        "width": 126,
-        "filter": True,
-        "cellClassRules": _level_class_rules(),
-    },
+        [
+            {
+                "field": "hierarchy_level",
+                "headerName": "Level",
+                "pinned": "left",
+                "width": 132,
+                "filter": True,
+                "cellClassRules": _level_class_rules(),
+            },
+            {
+                "field": "type",
+                "headerName": "Type",
+                "pinned": "left",
+                "width": 126,
+                "filter": True,
+                "cellClassRules": _level_class_rules(),
+            },
+        ],
+    ),
 ]
 
 
@@ -215,43 +253,76 @@ def build_column_defs():
             [_score_col(field, _initiative_label(field), 142) for field in INITIATIVES],
         ),
         _group(
-            "FSRM Eligible",
+            "Eligibility & Class.",
             {
-                **_count_col("fsrm_eligible_count", "FSRM Count", 132),
-                "cellClassRules": _overlay_rules(always="fsrm"),
+                "headerName": "Eligible",
+                "width": 128,
+                "filter": "agNumberColumnFilter",
+                "sortable": True,
+                "valueGetter": {"function": "return Number(params.data.fsrm_eligible_count || 0) + Number(params.data.milcon_eligible_count || 0);"},
+                "cellClassRules": _overlay_rules(),
+                "valueFormatter": {"function": "return params.value == null ? '' : Number(params.value).toLocaleString();"},
             },
             [
+                _text_col("fac_category", "FAC Category", 128),
                 {
-                    **_score_col("fsrm_eligibility_strength", "Strength"),
+                    **_count_col("fsrm_eligible_count", "FSRM Eligible", 136),
                     "cellClassRules": _overlay_rules(always="fsrm"),
                 },
                 {
-                    "field": "fsrm_band",
-                    "headerName": "Band",
-                    "width": 100,
-                    "filter": True,
-                    "cellClassRules": _overlay_rules(always="fsrm"),
+                    **_count_col("milcon_eligible_count", "MILCON Eligible", 148),
+                    "cellClassRules": _overlay_rules(always="milcon"),
                 },
             ],
         ),
         _group(
-            "MILCON Eligible",
-            {
-                **_count_col("milcon_eligible_count", "MILCON Count", 140),
-                "cellClassRules": _overlay_rules(always="milcon"),
-            },
+            "Condition Assessment",
+            _score_col("condition_fci_score", "Avg FCI", 120),
             [
-                {
-                    **_score_col("milcon_eligibility_strength", "Strength"),
-                    "cellClassRules": _overlay_rules(always="milcon"),
-                },
-                {
-                    "field": "milcon_band",
-                    "headerName": "Band",
-                    "width": 100,
-                    "filter": True,
-                    "cellClassRules": _overlay_rules(always="milcon"),
-                },
+                _score_col("condition_fci_score", "FCI Score", 118),
+                _count_col("service_life_years", "Svc Life (Yrs)", 132),
+                _score_col("mdi_score", "MDI Score", 118),
+            ],
+        ),
+        _group(
+            "Requirements",
+            _count_col("in_aces_pm_count", "ACES-PM", 120),
+            [
+                _count_col("gap_total", "Gap Count", 118, gap_delta=True),
+                _yes_no_col("in_aces_pm", "In ACES-PM", 128),
+            ],
+        ),
+        _group(
+            "Prioritization",
+            _count_col("on_base_ipl_count", "Base IPL", 120),
+            [
+                _yes_no_col("on_base_ipl", "On Base IPL", 126),
+                _count_col("afcamp_rank", "AFCAMP Rank", 132),
+            ],
+        ),
+        _group(
+            "Programming",
+            _count_col("in_fydp_count", "In FYDP", 116),
+            [
+                _text_col("funding_track", "Funding Track", 132),
+                _yes_no_col("in_fydp", "In FYDP", 112),
+                _year_col("exec_year", "Exec Year", 112),
+            ],
+        ),
+        _group(
+            "Budgeting",
+            _count_col("dd1391_active_count", "DD1391", 116),
+            [
+                _text_col("dd1391_status", "DD1391 Status", 142),
+                _text_col("pe_number", "PE Number", 132),
+            ],
+        ),
+        _group(
+            "Execution",
+            _count_col("exec_status_active_count", "Active Exec", 124),
+            [
+                _yes_no_col("cto_issued", "CTO Issued", 122),
+                _text_col("exec_status", "Exec Status", 148),
             ],
         ),
     ]
@@ -270,5 +341,18 @@ GRID_OPTIONS = {
     "enableCellTextSelection": True,
     "suppressMenuHide": True,
     "rowSelection": {"mode": "singleRow"},
+    "treeData": True,
+    "getDataPath": {"function": "getDataPath(params)"},
+    "groupDefaultExpanded": 2,
+    "autoGroupColumnDef": {
+        "headerName": "Name",
+        "field": "name",
+        "pinned": "left",
+        "width": 230,
+        "filter": True,
+        "cellRenderer": "agGroupCellRenderer",
+        "cellRendererParams": {"suppressCount": True},
+        "cellClassRules": _level_class_rules(),
+    },
     "sideBar": False,
 }

@@ -71,6 +71,15 @@ COUNT_FIELDS = [
     "milcon_eligible_count",
 ]
 
+BOOL_COUNT_FIELDS = [
+    "in_aces_pm_count",
+    "on_base_ipl_count",
+    "in_fydp_count",
+    "dd1391_active_count",
+    "cto_issued_count",
+    "exec_status_active_count",
+]
+
 ROLLUP_AVG_FIELDS = [
     "reaf_composite",
     *REAF_COMPONENTS,
@@ -79,9 +88,11 @@ ROLLUP_AVG_FIELDS = [
     *INITIATIVES,
     "fsrm_eligibility_strength",
     "milcon_eligibility_strength",
+    "condition_fci_score",
+    "mdi_score",
 ]
 
-ROLLUP_SUM_FIELDS = COUNT_FIELDS + ["unassigned_gap_count"]
+ROLLUP_SUM_FIELDS = COUNT_FIELDS + BOOL_COUNT_FIELDS + ["unassigned_gap_count"]
 
 
 def _choice(rng: random.Random, values: list[str], weights: list[int] | None = None) -> str:
@@ -98,6 +109,21 @@ def _avg(values: Iterable[float | int | None]) -> float | None:
 def _sum(values: Iterable[float | int | None]) -> float:
     valid = [value for value in values if value is not None and not pd.isna(value)]
     return round(sum(valid), 1)
+
+
+def _min_value(values: Iterable[float | int | None]) -> float | int | None:
+    valid = [value for value in values if value is not None and not pd.isna(value)]
+    if not valid:
+        return None
+    return min(valid)
+
+
+def _mode(values: Iterable[str | None]) -> str | None:
+    valid = [value for value in values if value]
+    if not valid:
+        return None
+    counts = pd.Series(valid).value_counts()
+    return str(counts.index[0])
 
 
 def _score(rng: random.Random, low: int = 20, high: int = 96) -> int:
@@ -126,24 +152,35 @@ def _asset_rows(seed: int = 7) -> pd.DataFrame:
     rng = random.Random(seed)
     enterprises = ["Air Force Enterprise"]
     majcoms = {
-        "Air Force Enterprise": ["ACC", "AETC", "PACAF"],
+        "Air Force Enterprise": ["ARC", "ETG", "PAC", "SPC"],
     }
     installations = {
-        "ACC": ["Nellis AFB", "Langley AFB", "Davis-Monthan AFB"],
-        "AETC": ["Lackland AFB", "Sheppard AFB", "Keesler AFB"],
-        "PACAF": ["Kadena AB", "Eielson AFB", "Andersen AFB"],
+        "ARC": ["Cobalt Ridge AFB", "Mesa Verde AFB", "Redstone Flats AFB", "Silver Dunes AFB", "Talon Point AFB", "Vega Springs AFB"],
+        "ETG": ["Aurora Gate AFB", "Blue Mesa AFB", "Cedar Run AFB", "Falcon Hollow AFB", "Juniper Field AFB", "Prairie Star AFB"],
+        "PAC": ["Coral Bay AB", "Granite Shoals AB", "Harbor Crest AB", "Koa Ridge AB", "Orchid Valley AB", "Typhoon Point AB"],
+        "SPC": ["Aster Mesa SFB", "Comet Basin SFB", "Kepler Ridge SFB", "Nova Hills SFB", "Pioneer Flats SFB", "Zenith Range SFB"],
     }
     missions = ["Fighter Operations", "Training", "Cyber Operations", "Logistics", "Command Support"]
     asset_types = ["Hangar", "Operations", "Utility Plant", "Dormitory", "Warehouse", "Clinic"]
     source_systems = ["BUILDER SMS", "NexGen IT", "AMP", "Power Study", "Manual Survey"]
+    fac_categories = {
+        "Hangar": ["2111", "2112", "2114"],
+        "Operations": ["1412", "1414", "1495"],
+        "Utility Plant": ["8910", "8920", "8930"],
+        "Dormitory": ["7211", "7213", "7214"],
+        "Warehouse": ["4421", "4422", "4428"],
+        "Clinic": ["5100", "5500", "5300"],
+    }
+    dd1391_statuses = ["Submitted", "MAJCOM", "AFIMSC", "HAF", "OSD"]
+    exec_statuses = ["Design", "Contract Award", "Construction", "Closeout", "Complete"]
 
     rows: list[dict] = []
     asset_index = 1
     for enterprise in enterprises:
         for majcom in majcoms[enterprise]:
             for installation in installations[majcom]:
-                for mission in rng.sample(missions, 3):
-                    for asset_offset in range(rng.randint(3, 5)):
+                for mission in missions:
+                    for asset_offset in range(rng.randint(4, 7)):
                         gap_counts = {field: rng.randint(0, 3) for field in [_gap_field(category) for category in GAP_CATEGORIES]}
                         gap_total = sum(gap_counts.values())
                         building_condition = _score(rng, 22, 94)
@@ -151,8 +188,23 @@ def _asset_rows(seed: int = 7) -> pd.DataFrame:
                         fsrm_strength = min(100, round(gap_total * 8 + (100 - building_condition) * 0.55 + rng.randint(0, 16)))
                         milcon_strength = min(100, round(gap_total * 5 + max(0, 65 - utility_score) * 0.75 + rng.randint(0, 18)))
                         funding_count = rng.randint(0, 5)
-                        asset_name = f"{installation[:3].upper()}-{100 + asset_index}"
-                        node_id = _node_id(enterprise, majcom, installation, mission, asset_name)
+                        asset_type = _choice(rng, asset_types)
+                        local_building_number = f"B{1000 + asset_index}"
+                        installation_code = "".join(part[0] for part in installation.replace("-", " ").split())[:4].upper()
+                        rpuid = f"AF-{installation_code}-{asset_index:03d}"
+                        asset_name = f"{local_building_number} - {rpuid}"
+                        in_aces_pm = funding_count > 0 and rng.random() < 0.72
+                        on_base_ipl = funding_count > 0 and rng.random() < 0.54
+                        afcamp_rank = rng.randint(1, 450) if on_base_ipl and rng.random() < 0.68 else None
+                        funding_track = ""
+                        if funding_count > 0:
+                            funding_track = "MILCON" if rng.random() < 0.32 or milcon_strength > fsrm_strength + 10 else "FSRM"
+                        in_fydp = bool(funding_track and rng.random() < 0.42)
+                        exec_year = rng.randint(2027, 2031) if in_fydp else None
+                        dd1391_status = _choice(rng, dd1391_statuses) if funding_track == "MILCON" and rng.random() < 0.58 else ""
+                        cto_issued = funding_track == "FSRM" and rng.random() < 0.34
+                        exec_status = _choice(rng, exec_statuses) if funding_track and rng.random() < 0.46 else "None"
+                        node_id = _node_id(enterprise, majcom, installation, mission, rpuid)
 
                         rows.append(
                             {
@@ -162,12 +214,15 @@ def _asset_rows(seed: int = 7) -> pd.DataFrame:
                                 "hierarchy_level": "Building/Asset",
                                 "level_rank": LEVEL_ORDER["Building/Asset"],
                                 "name": asset_name,
-                                "type": _choice(rng, asset_types),
+                                "row_meta": "Building/Asset / " + asset_type,
+                                "type": asset_type,
                                 "enterprise": enterprise,
                                 "majcom": majcom,
                                 "installation": installation,
                                 "mission": mission,
                                 "building_asset": asset_name,
+                                "local_building_number": local_building_number,
+                                "rpuid": rpuid,
                                 "source_system": _choice(rng, source_systems),
                                 "reaf_composite": None,
                                 **{field: None for field in REAF_COMPONENTS},
@@ -188,6 +243,26 @@ def _asset_rows(seed: int = 7) -> pd.DataFrame:
                                 "milcon_eligibility_strength": milcon_strength,
                                 "fsrm_band": _score_band(fsrm_strength),
                                 "milcon_band": _score_band(milcon_strength),
+                                "fac_category": _choice(rng, fac_categories[asset_type]),
+                                "condition_fci_score": building_condition,
+                                "service_life_years": rng.randint(1, 42),
+                                "mdi_score": _score(rng, 35, 100),
+                                "in_aces_pm": "Yes" if in_aces_pm else "No",
+                                "in_aces_pm_count": int(in_aces_pm),
+                                "on_base_ipl": "Yes" if on_base_ipl else "No",
+                                "on_base_ipl_count": int(on_base_ipl),
+                                "afcamp_rank": afcamp_rank,
+                                "funding_track": funding_track,
+                                "in_fydp": "Yes" if in_fydp else "No",
+                                "in_fydp_count": int(in_fydp),
+                                "exec_year": exec_year,
+                                "dd1391_status": dd1391_status,
+                                "dd1391_active_count": int(bool(dd1391_status)),
+                                "pe_number": f"PE{rng.randint(100000, 999999)}" if in_fydp else "",
+                                "cto_issued": "Yes" if cto_issued else ("No" if funding_track == "FSRM" else ""),
+                                "cto_issued_count": int(cto_issued),
+                                "exec_status": exec_status,
+                                "exec_status_active_count": int(exec_status != "None"),
                                 "rbac_enterprise": enterprise,
                                 "rbac_majcom": majcom,
                                 "rbac_installation": installation,
@@ -230,12 +305,15 @@ def _aggregate(asset_df: pd.DataFrame, level: str, group_cols: list[str], missio
             "hierarchy_level": level,
             "level_rank": LEVEL_ORDER[level],
             "name": str(context[group_cols[-1]]),
+            "row_meta": f"{level} / Rollup",
             "type": "Rollup",
             "enterprise": context.get("enterprise"),
             "majcom": context.get("majcom"),
             "installation": context.get("installation"),
             "mission": context.get("mission"),
             "building_asset": None,
+            "local_building_number": None,
+            "rpuid": None,
             "source_system": "Rollup",
             "unassigned_gap_count": unassigned_gap_count,
             "has_unassigned_gap_delta": bool(unassigned_gap_count > 0 and level == "Mission"),
@@ -269,6 +347,21 @@ def _aggregate(asset_df: pd.DataFrame, level: str, group_cols: list[str], missio
         row["milcon_eligibility_strength"] = _avg(group["milcon_eligibility_strength"])
         row["fsrm_band"] = _score_band(row["fsrm_eligibility_strength"])
         row["milcon_band"] = _score_band(row["milcon_eligibility_strength"])
+        row["fac_category"] = None
+        row["condition_fci_score"] = _avg(group["condition_fci_score"])
+        row["service_life_years"] = _avg(group["service_life_years"])
+        row["mdi_score"] = _avg(group["mdi_score"])
+        row["in_aces_pm"] = row["in_aces_pm_count"]
+        row["on_base_ipl"] = row["on_base_ipl_count"]
+        row["afcamp_rank"] = _min_value(group["afcamp_rank"])
+        row["funding_track"] = _mode(group["funding_track"])
+        row["in_fydp"] = row["in_fydp_count"]
+        row["exec_year"] = _min_value(group["exec_year"])
+        row["dd1391_status"] = _mode(group["dd1391_status"])
+        row["dd1391_active_count"] = _sum(group["dd1391_active_count"])
+        row["pe_number"] = None
+        row["cto_issued"] = row["cto_issued_count"]
+        row["exec_status"] = _mode(group["exec_status"])
         rows.append(row)
     return pd.DataFrame(rows)
 
@@ -307,16 +400,16 @@ def apply_role_scope(df: pd.DataFrame, role: str) -> pd.DataFrame:
     if role == "enterprise":
         return df
     if role == "majcom_acc":
-        return df[(df["rbac_majcom"].isna()) | (df["rbac_majcom"] == "ACC")]
+        return df[(df["rbac_majcom"].isna()) | (df["rbac_majcom"] == "ARC")]
     if role == "installation_nellis":
         return df[
             df["hierarchy_level"].isin(["Enterprise", "MAJCOM"])
-            | (df["rbac_installation"] == "Nellis AFB")
+            | (df["rbac_installation"] == "Talon Point AFB")
         ]
     if role == "mission_nellis_fighter":
         return df[
             df["hierarchy_level"].isin(["Enterprise", "MAJCOM", "Installation"])
-            | ((df["rbac_installation"] == "Nellis AFB") & (df["rbac_mission"] == "Fighter Operations"))
+            | ((df["rbac_installation"] == "Talon Point AFB") & (df["rbac_mission"] == "Fighter Operations"))
         ]
     if role == "asset_first":
         first_asset = df[df["hierarchy_level"] == "Building/Asset"].iloc[0]
